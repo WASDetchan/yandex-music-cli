@@ -44,48 +44,62 @@ fn make_shared_headers(token: &str) -> HeaderMap<HeaderValue> {
 //     result
 // }
 
-async fn get_user_id(headers: HeaderMap<HeaderValue>) -> anyhow::Result<String> {
-    CLIENT
+async fn get_user_id(headers: HeaderMap<HeaderValue>) -> anyhow::Result<u64> {
+    let response: serde_json::Value = CLIENT
         .get(format!("{YANDEX_MUSIC_API_URL}/account/status"))
         .headers(headers)
-        .header("x-Yandex-Music-Client", "YandexMusicAndroid/24024312")
-        // .header("Content-Type", "x-www-form-urlencoded")
-        .header("accept", "application/json")
         .send()
         .await
         .context("Getting user id")?
-        .text()
+        .json()
         .await
-        .context("Getting user id")
+        .context("Getting user id. Possibly got asked to do a CAPTHCA?")?;
+
+    log::trace!("get_user_id response: {response:?}");
+    let user_id: Option<u64> = (|| {
+        Some(
+            response
+                .get("result")?
+                .get("account")?
+                .get("uid")?
+                .as_number()?
+                .as_u64()?
+                .to_owned(),
+        )
+    })();
+    user_id.ok_or(anyhow::anyhow!("The response did not contain the user id"))
 }
 
-async fn get_likes(token: &str, user_id: &str) -> anyhow::Result<String> {
-    CLIENT
+async fn get_likes(headers: HeaderMap<HeaderValue>, user_id: u64) -> anyhow::Result<()> {
+    let response: serde_json::Value = CLIENT
         .get(format!(
             "{YANDEX_MUSIC_API_URL}/users/{user_id}/likes/tracks"
         ))
-        .header("x-Yandex-Music-Client", "YandexMusicAndroid/24024312")
-        .header("User-Agent", "okhttp/4.12.0")
-        // .header("Content-Type", "x-www-form-urlencoded")
-        .header("accept", "application/json")
-        .header("Authorization", format!("OAuth {token}"))
+        .headers(headers)
         .send()
         .await
         .context("Getting likes")?
-        .text()
+        .json()
         .await
-        .context("Getting likes")
+        .context("Getting likes")?;
+
+    log::trace!("get_likes response: {response:?}");
+
+    Ok(())
 }
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
+    env_logger::init();
     let Args { token } = Args::parse();
 
     let headers = make_shared_headers(&token);
 
-    let user_id = get_user_id(headers).await?;
+    let user_id = get_user_id(headers.clone()).await?;
 
     println!("{user_id}");
+
+    get_likes(headers, user_id).await?;
     //
     // let user_id = String::from("000000000");
     //
